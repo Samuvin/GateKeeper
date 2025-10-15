@@ -1,15 +1,18 @@
-package httpclient
+package client
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"time"
 
-	"data-plane/internal/httpclient/interfaces"
+	"data-plane/internal/transport/http/models"
+	"data-plane/internal/transport/interfaces"
 )
 
-// HTTPClient implements IHTTPClient and provides request execution capabilities.
-// This separates request building from request execution following the command pattern.
+// HTTPClient implements IHTTPClient and provides basic HTTP request execution.
+// This follows the Single Responsibility Principle - it only performs HTTP calls.
+// Resiliency features (retry, circuit breaker, etc.) are handled by decorators.
 type HTTPClient struct {
 	httpClient *http.Client
 	timeout    time.Duration
@@ -39,39 +42,50 @@ func NewHTTPClientWithTimeout(timeout time.Duration) interfaces.IHTTPClient {
 }
 
 // Send executes the given request and returns a response.
+// This method only performs the HTTP call - no resiliency logic.
+// Resiliency is handled by decorators wrapping this client.
 func (c *HTTPClient) Send(request interfaces.IHTTPRequest) (interfaces.IHTTPResponse, error) {
 	if request == nil {
-		return nil, &HTTPError{
+		return nil, &models.HTTPError{
 			Message: "request cannot be nil",
 		}
 	}
 
 	httpReq := request.HTTPRequest()
 	if httpReq == nil {
-		return nil, &HTTPError{
+		return nil, &models.HTTPError{
 			Message: "invalid request: HTTPRequest is nil",
 		}
 	}
 
+	// Create context with timeout if configured
+	ctx := httpReq.Context()
+	if c.timeout > 0 {
+		timeoutCtx, cancel := context.WithTimeout(ctx, c.timeout)
+		defer cancel()
+		httpReq = httpReq.WithContext(timeoutCtx)
+	}
+
+	// Execute HTTP request
 	httpResp, err := c.httpClient.Do(httpReq)
 	if err != nil {
-		return nil, &HTTPError{
-			request: request,
+		return nil, &models.HTTPError{
+			Request: request,
 			Message: fmt.Sprintf("%s request failed", request.Method()),
 			Err:     err,
 		}
 	}
 
-	resp := &Response{
-		httpResponse: httpResp,
-		request:      request,
+	resp := &models.Response{
+		HttpResp:   httpResp,
+		RequestRef: request,
 	}
 
 	// Check for HTTP errors (4xx, 5xx)
 	if httpResp.StatusCode >= 400 {
-		return resp, &HTTPError{
-			request:    request,
-			response:   resp,
+		return resp, &models.HTTPError{
+			Request:    request,
+			Response:   resp,
 			StatusCode: httpResp.StatusCode,
 			Message:    fmt.Sprintf("%s request returned error status %d", request.Method(), httpResp.StatusCode),
 		}
@@ -83,7 +97,7 @@ func (c *HTTPClient) Send(request interfaces.IHTTPRequest) (interfaces.IHTTPResp
 // SendWithHandler executes the request and processes the response with a handler.
 func (c *HTTPClient) SendWithHandler(request interfaces.IHTTPRequest, handler interfaces.IResponseHandler) (interface{}, error) {
 	if handler == nil {
-		return nil, &HTTPError{
+		return nil, &models.HTTPError{
 			Message: "response handler cannot be nil",
 		}
 	}
@@ -100,9 +114,9 @@ func (c *HTTPClient) SendWithHandler(request interfaces.IHTTPRequest, handler in
 	}
 
 	if !handler.CanHandle(resp) {
-		return nil, &HTTPError{
-			request:  request,
-			response: resp,
+		return nil, &models.HTTPError{
+			Request:  request,
+			Response: resp,
 			Message:  "handler cannot process this response",
 		}
 	}

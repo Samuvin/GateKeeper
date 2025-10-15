@@ -1,11 +1,12 @@
-package httpclient
+package handler
 
 import (
 	"encoding/json"
 	"fmt"
 	"reflect"
 
-	"data-plane/internal/httpclient/interfaces"
+	"data-plane/internal/transport/http/models"
+	"data-plane/internal/transport/interfaces"
 )
 
 // ResponseHandler provides a generic type-safe response handler.
@@ -113,8 +114,8 @@ func (h *ResponseHandler) HandleError(response interfaces.IHTTPResponse) error {
 
 	// Default error handling
 	body, _ := response.BodyString()
-	return &HTTPError{
-		response:   response,
+	return &models.HTTPError{
+		Response:   response,
 		StatusCode: response.StatusCode(),
 		Message:    fmt.Sprintf("HTTP %d: %s", response.StatusCode(), body),
 	}

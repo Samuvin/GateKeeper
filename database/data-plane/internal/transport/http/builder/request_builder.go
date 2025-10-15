@@ -1,4 +1,4 @@
-package httpclient
+package builder
 
 import (
 	"bytes"
@@ -11,7 +11,10 @@ import (
 	"strings"
 	"time"
 
-	"data-plane/internal/httpclient/interfaces"
+	"data-plane/internal/transport/http/client"
+	"data-plane/internal/transport/http/models"
+	"data-plane/internal/transport/interfaces"
+	"data-plane/internal/transport/middleware"
 )
 
 // RequestBuilder provides a fluent interface for building HTTP requests.
@@ -30,6 +33,18 @@ type RequestBuilder struct {
 	ctx         context.Context
 	client      *http.Client
 	err         error
+
+	// Factory for creating components (Dependency Injection)
+	factory client.ClientFactory
+
+	// Resiliency configuration
+	retryPolicy    interfaces.IRetryPolicy
+	circuitBreaker interfaces.ICircuitBreaker
+	rateLimiter    interfaces.IRateLimiter
+	bulkhead       interfaces.IBulkhead
+	middlewares    []interfaces.IMiddleware
+	enableLogging  bool
+	enableMetrics  bool
 }
 
 // Ensure RequestBuilder implements IRequestBuilder interface
@@ -37,13 +52,21 @@ var _ interfaces.IRequestBuilder = (*RequestBuilder)(nil)
 
 // NewBuilder creates a new RequestBuilder with sensible defaults.
 // The default scheme is "https" and the default timeout is 30 seconds.
+// Uses the global default factory for creating components.
 func NewBuilder() interfaces.IRequestBuilder {
+	return NewBuilderWithFactory(client.GetDefaultFactory())
+}
+
+// NewBuilderWithFactory creates a new RequestBuilder with a custom factory.
+// This enables dependency injection for testing and custom implementations.
+func NewBuilderWithFactory(factory client.ClientFactory) interfaces.IRequestBuilder {
 	return &RequestBuilder{
 		scheme:      "https",
 		queryParams: url.Values{},
 		headers:     http.Header{},
 		timeout:     30 * time.Second,
 		ctx:         context.Background(),
+		factory:     factory,
 	}
 }
 
@@ -292,49 +315,131 @@ func (rb *RequestBuilder) Build() (interfaces.IHTTPRequest, error) {
 	// Copy headers to request
 	httpReq.Header = rb.headers.Clone()
 
-	return &Request{
-		httpRequest: httpReq,
-		timeout:     rb.timeout,
+	return &models.Request{
+		HTTPReq:    httpReq,
+		TimeoutVal: rb.timeout,
 	}, nil
 }
+
+// ============= RESILIENCY CONFIGURATION METHODS =============
+
+// WithRetry configures retry behavior with exponential backoff.
+// Uses the factory to create the retry policy (Dependency Inversion Principle).
+func (rb *RequestBuilder) WithRetry(maxAttempts int) interfaces.IRequestBuilder {
+	if rb.err != nil {
+		return rb
+	}
+	rb.retryPolicy = rb.factory.CreateRetryPolicy(maxAttempts)
+	return rb
+}
+
+// WithRetryPolicy sets a custom retry policy.
+func (rb *RequestBuilder) WithRetryPolicy(policy interfaces.IRetryPolicy) interfaces.IRequestBuilder {
+	if rb.err != nil {
+		return rb
+	}
+	rb.retryPolicy = policy
+	return rb
+}
+
+// WithCircuitBreaker configures circuit breaker pattern.
+// Uses the factory to create the circuit breaker (Dependency Inversion Principle).
+func (rb *RequestBuilder) WithCircuitBreaker(failureThreshold int, timeout time.Duration) interfaces.IRequestBuilder {
+	if rb.err != nil {
+		return rb
+	}
+	rb.circuitBreaker = rb.factory.CreateCircuitBreaker(failureThreshold, timeout)
+	return rb
+}
+
+// WithRateLimiter configures rate limiting.
+// Uses the factory to create the rate limiter (Dependency Inversion Principle).
+func (rb *RequestBuilder) WithRateLimiter(rps float64, burst int) interfaces.IRequestBuilder {
+	if rb.err != nil {
+		return rb
+	}
+	rb.rateLimiter = rb.factory.CreateRateLimiter(rps, burst)
+	return rb
+}
+
+// WithBulkhead configures bulkhead pattern (concurrency limiting).
+// Uses the factory to create the bulkhead (Dependency Inversion Principle).
+func (rb *RequestBuilder) WithBulkhead(maxConcurrency int) interfaces.IRequestBuilder {
+	if rb.err != nil {
+		return rb
+	}
+	rb.bulkhead = rb.factory.CreateBulkhead(maxConcurrency)
+	return rb
+}
+
+// WithLogging enables request/response logging.
+func (rb *RequestBuilder) WithLogging() interfaces.IRequestBuilder {
+	if rb.err != nil {
+		return rb
+	}
+	rb.enableLogging = true
+	return rb
+}
+
+// WithMetrics enables metrics collection.
+func (rb *RequestBuilder) WithMetrics() interfaces.IRequestBuilder {
+	if rb.err != nil {
+		return rb
+	}
+	rb.enableMetrics = true
+	return rb
+}
+
+// WithMiddleware adds custom middleware to the request.
+func (rb *RequestBuilder) WithMiddleware(middleware interfaces.IMiddleware) interfaces.IRequestBuilder {
+	if rb.err != nil {
+		return rb
+	}
+	if middleware != nil {
+		rb.middlewares = append(rb.middlewares, middleware)
+	}
+	return rb
+}
+
+// ============= INTERNAL METHODS =============
 
 // Execute sends the request and returns a Response or HTTPError.
 // This is an internal helper method that builds and executes the request.
 func (rb *RequestBuilder) Execute() (interfaces.IHTTPResponse, error) {
 	req, err := rb.Build()
 	if err != nil {
-		return nil, &HTTPError{
+		return nil, &models.HTTPError{
 			Message: "failed to build request",
 			Err:     err,
 		}
 	}
 
-	client := rb.client
-	if client == nil {
-		client = &http.Client{
+	httpClient := rb.client
+	if httpClient == nil {
+		httpClient = &http.Client{
 			Timeout: rb.timeout,
 		}
 	}
 
-	httpResp, err := client.Do(req.HTTPRequest())
+	httpResp, err := httpClient.Do(req.HTTPRequest())
 	if err != nil {
-		return nil, &HTTPError{
-			request: req,
+		return nil, &models.HTTPError{
+			Request: req,
 			Message: fmt.Sprintf("%s request failed", req.Method()),
 			Err:     err,
 		}
 	}
 
-	resp := &Response{
-		httpResponse: httpResp,
-		request:      req,
+	resp := &models.Response{
+		HttpResp:   httpResp,
+		RequestRef: req,
 	}
 
 	// Check for HTTP errors (4xx, 5xx)
 	if httpResp.StatusCode >= 400 {
-		return resp, &HTTPError{
-			request:    req,
-			response:   resp,
+		return resp, &models.HTTPError{
+			Request:    req,
+			Response:   resp,
 			StatusCode: httpResp.StatusCode,
 			Message:    fmt.Sprintf("%s request returned error status", req.Method()),
 		}
@@ -383,4 +488,109 @@ func (rb *RequestBuilder) DELETE() interfaces.IRequestBuilder {
 func (rb *RequestBuilder) Method(method string) interfaces.IRequestBuilder {
 	rb.method = method
 	return rb
+}
+
+// ============= EXECUTION METHODS =============
+
+// Sync builds and executes the request synchronously.
+// This is a convenience method that combines Build() and Send().
+func (rb *RequestBuilder) Sync() (interfaces.IHTTPResponse, error) {
+	req, err := rb.Build()
+	if err != nil {
+		return nil, err
+	}
+
+	// Create client with resiliency features
+	client := rb.createClientWithResiliency()
+
+	return client.Send(req)
+}
+
+// Async builds and executes the request asynchronously using a goroutine.
+// Returns a channel that will receive the result.
+func (rb *RequestBuilder) Async() <-chan interfaces.AsyncResult {
+	resultChan := make(chan interfaces.AsyncResult, 1)
+
+	go func() {
+		defer close(resultChan)
+
+		startTime := time.Now()
+		req, err := rb.Build()
+		if err != nil {
+			select {
+			case resultChan <- interfaces.AsyncResult{
+				Request:  nil,
+				Response: nil,
+				Error:    err,
+				Duration: time.Since(startTime),
+			}:
+			case <-rb.ctx.Done():
+			}
+			return
+		}
+
+		client := rb.createClientWithResiliency()
+		resp, err := client.Send(req)
+
+		// Non-blocking send with context awareness
+		select {
+		case resultChan <- interfaces.AsyncResult{
+			Request:  req,
+			Response: resp,
+			Error:    err,
+			Duration: time.Since(startTime),
+		}:
+		case <-rb.ctx.Done():
+		}
+	}()
+
+	return resultChan
+}
+
+// createClientWithResiliency creates an HTTPClient with all configured resiliency features.
+// Uses the Decorator pattern to wrap the base client with resiliency layers.
+// This follows the Single Responsibility Principle - each decorator has one job.
+func (rb *RequestBuilder) createClientWithResiliency() interfaces.IHTTPClient {
+	// 1. Create base HTTP client (single responsibility: HTTP calls only)
+	httpClient := rb.factory.CreateHTTPClient(rb.client, rb.timeout)
+
+	// 2. Apply decorators in order (innermost to outermost):
+	// Order matters: Middleware → Rate Limit → Bulkhead → Circuit Breaker → Retry → Logging/Metrics
+
+	// Apply middleware decorator (if configured)
+	if len(rb.middlewares) > 0 {
+		httpClient = middleware.NewMiddlewareDecorator(httpClient, rb.middlewares)
+	}
+
+	// Apply rate limiter decorator (if configured)
+	if rb.rateLimiter != nil {
+		httpClient = middleware.NewRateLimiterDecorator(httpClient, rb.rateLimiter)
+	}
+
+	// Apply bulkhead decorator (if configured)
+	if rb.bulkhead != nil {
+		httpClient = middleware.NewBulkheadDecorator(httpClient, rb.bulkhead)
+	}
+
+	// Apply circuit breaker decorator (if configured)
+	if rb.circuitBreaker != nil {
+		httpClient = middleware.NewCircuitBreakerDecorator(httpClient, rb.circuitBreaker)
+	}
+
+	// Apply retry decorator (if configured)
+	if rb.retryPolicy != nil {
+		httpClient = middleware.NewRetryDecorator(httpClient, rb.retryPolicy)
+	}
+
+	// Apply logging decorator (if enabled)
+	if rb.enableLogging {
+		httpClient = middleware.NewLoggingDecorator(httpClient)
+	}
+
+	// Apply metrics decorator (if enabled)
+	if rb.enableMetrics {
+		httpClient = middleware.NewMetricsDecorator(httpClient)
+	}
+
+	return httpClient
 }

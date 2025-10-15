@@ -43,4 +43,3 @@ type IHTTPError interface {
 	// Unwrap returns the underlying error for error chain support.
 	Unwrap() error
 }
-

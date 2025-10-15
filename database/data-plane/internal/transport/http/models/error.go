@@ -1,19 +1,19 @@
-package httpclient
+package models
 
 import (
 	"errors"
 	"fmt"
 	"net"
 
-	"data-plane/internal/httpclient/interfaces"
+	"data-plane/internal/transport/interfaces"
 )
 
 // HTTPError represents an error that occurred during an HTTP request.
 // It provides detailed context about the request, response, and error.
 // It implements the IHTTPError interface.
 type HTTPError struct {
-	request    interfaces.IHTTPRequest
-	response   interfaces.IHTTPResponse
+	Request    interfaces.IHTTPRequest
+	Response   interfaces.IHTTPResponse
 	StatusCode int
 	Message    string
 	Err        error
@@ -98,12 +98,12 @@ func (e *HTTPError) IsNetworkError() bool {
 
 // GetRequest returns the request that caused this error.
 func (e *HTTPError) GetRequest() interfaces.IHTTPRequest {
-	return e.request
+	return e.Request
 }
 
 // GetResponse returns the response if available (may be nil for network errors).
 func (e *HTTPError) GetResponse() interfaces.IHTTPResponse {
-	return e.response
+	return e.Response
 }
 
 // GetStatusCode returns the HTTP status code if available (0 for network errors).
@@ -123,10 +123,10 @@ func (e *HTTPError) GetError() error {
 
 // GetResponseBody attempts to read and return the response body if available.
 func (e *HTTPError) GetResponseBody() (string, error) {
-	if e.response == nil {
+	if e.Response == nil {
 		return "", fmt.Errorf("no response available")
 	}
-	return e.response.BodyString()
+	return e.Response.BodyString()
 }
 
 // NewHTTPError creates a new HTTPError with the given message.

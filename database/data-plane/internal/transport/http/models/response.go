@@ -1,4 +1,4 @@
-package httpclient
+package models
 
 import (
 	"encoding/json"
@@ -6,17 +6,17 @@ import (
 	"io"
 	"net/http"
 
-	"data-plane/internal/httpclient/interfaces"
+	"data-plane/internal/transport/interfaces"
 )
 
 // Response wraps http.Response and provides convenient methods
 // for handling response data, status codes, and error checking.
 // It implements the IHTTPResponse interface.
 type Response struct {
-	httpResponse *http.Response
-	request      interfaces.IHTTPRequest
-	body         []byte
-	bodyRead     bool
+	HttpResp   *http.Response
+	RequestRef interfaces.IHTTPRequest
+	BodyData   []byte
+	BodyRead   bool
 }
 
 // Ensure Response implements IHTTPResponse interface
@@ -24,18 +24,18 @@ var _ interfaces.IHTTPResponse = (*Response)(nil)
 
 // StatusCode returns the HTTP status code of the response.
 func (r *Response) StatusCode() int {
-	if r.httpResponse == nil {
+	if r.HttpResp == nil {
 		return 0
 	}
-	return r.httpResponse.StatusCode
+	return r.HttpResp.StatusCode
 }
 
 // Status returns the HTTP status string (e.g., "200 OK").
 func (r *Response) Status() string {
-	if r.httpResponse == nil {
+	if r.HttpResp == nil {
 		return ""
 	}
-	return r.httpResponse.Status
+	return r.HttpResp.Status
 }
 
 // IsSuccess returns true if the status code is 2xx.
@@ -64,41 +64,41 @@ func (r *Response) IsServerError() bool {
 
 // Header returns a specific header value from the response.
 func (r *Response) Header(key string) string {
-	if r.httpResponse == nil {
+	if r.HttpResp == nil {
 		return ""
 	}
-	return r.httpResponse.Header.Get(key)
+	return r.HttpResp.Header.Get(key)
 }
 
 // Headers returns all headers from the response.
 func (r *Response) Headers() http.Header {
-	if r.httpResponse == nil {
+	if r.HttpResp == nil {
 		return http.Header{}
 	}
-	return r.httpResponse.Header
+	return r.HttpResp.Header
 }
 
 // Body reads and returns the response body as bytes.
 // The body is cached after first read.
 func (r *Response) Body() ([]byte, error) {
-	if r.bodyRead {
-		return r.body, nil
+	if r.BodyRead {
+		return r.BodyData, nil
 	}
 
-	if r.httpResponse == nil || r.httpResponse.Body == nil {
+	if r.HttpResp == nil || r.HttpResp.Body == nil {
 		return nil, fmt.Errorf("response body is nil")
 	}
 
-	defer r.httpResponse.Body.Close()
+	defer r.HttpResp.Body.Close()
 
-	data, err := io.ReadAll(r.httpResponse.Body)
+	data, err := io.ReadAll(r.HttpResp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
 
-	r.body = data
-	r.bodyRead = true
-	return r.body, nil
+	r.BodyData = data
+	r.BodyRead = true
+	return r.BodyData, nil
 }
 
 // BodyString reads and returns the response body as a string.
@@ -126,15 +126,15 @@ func (r *Response) JSON(v interface{}) error {
 
 // Close closes the response body if it hasn't been read yet.
 func (r *Response) Close() error {
-	if r.httpResponse != nil && r.httpResponse.Body != nil && !r.bodyRead {
-		return r.httpResponse.Body.Close()
+	if r.HttpResp != nil && r.HttpResp.Body != nil && !r.BodyRead {
+		return r.HttpResp.Body.Close()
 	}
 	return nil
 }
 
 // Request returns the original IHTTPRequest that generated this response.
 func (r *Response) Request() interfaces.IHTTPRequest {
-	return r.request
+	return r.RequestRef
 }
 
 // ContentType returns the Content-Type header value.
@@ -144,22 +144,22 @@ func (r *Response) ContentType() string {
 
 // ContentLength returns the Content-Length header value.
 func (r *Response) ContentLength() int64 {
-	if r.httpResponse == nil {
+	if r.HttpResp == nil {
 		return 0
 	}
-	return r.httpResponse.ContentLength
+	return r.HttpResp.ContentLength
 }
 
 // HTTPResponse returns the underlying *http.Response object.
 func (r *Response) HTTPResponse() *http.Response {
-	return r.httpResponse
+	return r.HttpResp
 }
 
 // Reader returns an io.ReadCloser for streaming the response body.
 // Use this for large responses to avoid loading everything into memory.
 func (r *Response) Reader() io.ReadCloser {
-	if r.httpResponse == nil {
+	if r.HttpResp == nil {
 		return nil
 	}
-	return r.httpResponse.Body
+	return r.HttpResp.Body
 }

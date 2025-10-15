@@ -62,4 +62,3 @@ type IHTTPResponse interface {
 	// Use this for large responses to avoid loading everything into memory.
 	Reader() io.ReadCloser
 }
-

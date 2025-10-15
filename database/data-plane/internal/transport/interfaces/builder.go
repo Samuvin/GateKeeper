@@ -63,6 +63,34 @@ type IRequestBuilder interface {
 	// WithContext sets the context for the request.
 	WithContext(ctx context.Context) IRequestBuilder
 
+	// ============= RESILIENCY CONFIGURATION =============
+
+	// WithRetry configures retry behavior with exponential backoff.
+	WithRetry(maxAttempts int) IRequestBuilder
+
+	// WithRetryPolicy sets a custom retry policy.
+	WithRetryPolicy(policy IRetryPolicy) IRequestBuilder
+
+	// WithCircuitBreaker configures circuit breaker pattern.
+	WithCircuitBreaker(failureThreshold int, timeout time.Duration) IRequestBuilder
+
+	// WithRateLimiter configures rate limiting.
+	WithRateLimiter(rps float64, burst int) IRequestBuilder
+
+	// WithBulkhead configures bulkhead pattern (concurrency limiting).
+	WithBulkhead(maxConcurrency int) IRequestBuilder
+
+	// WithLogging enables request/response logging.
+	WithLogging() IRequestBuilder
+
+	// WithMetrics enables metrics collection.
+	WithMetrics() IRequestBuilder
+
+	// WithMiddleware adds custom middleware to the request.
+	WithMiddleware(middleware IMiddleware) IRequestBuilder
+
+	// ============= HTTP METHODS =============
+
 	// GET sets the HTTP method to GET and builds the request.
 	GET() IRequestBuilder
 
@@ -84,5 +112,12 @@ type IRequestBuilder interface {
 	// Build constructs and returns the IHTTPRequest without executing it.
 	// This allows separation between request construction and execution.
 	Build() (IHTTPRequest, error)
-}
 
+	// Sync executes the request synchronously and returns the response.
+	// This is a convenience method that builds and executes in one call.
+	Sync() (IHTTPResponse, error)
+
+	// Async executes the request asynchronously and returns a channel.
+	// The response will be sent to the channel when available.
+	Async() <-chan AsyncResult
+}

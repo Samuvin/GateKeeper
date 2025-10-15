@@ -28,4 +28,3 @@ type IHTTPRequest interface {
 	// Use this when you need direct access to the standard library request.
 	HTTPRequest() *http.Request
 }
-
